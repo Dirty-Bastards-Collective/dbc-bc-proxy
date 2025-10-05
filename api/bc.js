@@ -1,13 +1,13 @@
 // api/bc.js
 // Serverless proxy → forwards to Catalyst, adds CORS for Showit + your final domains
-// Includes diagnostics: returns upstream status/text for each attempt on failure.
+// Works with https://dbc-bc-proxy.vercel.app (make sure env vars are set in Vercel)
 
 export default async function handler(req, res) {
   const origin = req.headers.origin || "";
 
   // Allowlist (exact matches)
   const ALLOW_EXACT = [
-    // Showit (keep until fully live)
+    // Showit (keep while migrating)
     "https://dirtybastardscollective-llc-4.showitpreview.com",
     "https://dirtybastardscollective-llc-4.showit.site",
 
@@ -16,6 +16,7 @@ export default async function handler(req, res) {
     "https://www.dirtybastardscollective.com",
   ];
 
+  // Also accept any *.showit.site / *.showitpreview.com subdomains
   const allowed =
     !!origin &&
     (
@@ -37,8 +38,8 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", allowed ? origin : "*");
   res.setHeader("Vary", "Origin");
 
-  // ---- Catalyst config from env ----
-  const HOST = process.env.CATALYST_HOST;             // e.g. https://store-...catalyst-...store
+  // ---- Catalyst config from env (set these in Vercel: Settings → Environment Variables) ----
+  const HOST = process.env.CATALYST_HOST;             // e.g. https://store-dixtnk4p46-1790940.catalyst-sandbox-vercel.store
   const SITE_KEY = process.env.CATALYST_SITE_API_KEY; // your Site API key
 
   if (!HOST || !SITE_KEY) {
@@ -114,63 +115,43 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Try common Catalyst endpoints/headers
+  // Try common Catalyst endpoints/headers (Catalyst installs differ slightly)
   const endpoints = [
     `${HOST}/api/storefront`,
     `${HOST}/api/storefront/graphql`,
     `${HOST}/graphql`,
-    `${HOST}/storefront/graphql`,          // extra candidates
+    `${HOST}/storefront/graphql`,
     `${HOST}/api/graphql`,
   ];
 
   const headersVariants = [
     { "Content-Type": "application/json", "x-site-api-key": SITE_KEY },
     { "Content-Type": "application/json", "x-api-key": SITE_KEY },
+    { "Content-Type": "application/json", "Authorization": `Bearer ${SITE_KEY}` },
     { "Content-Type": "application/json", "authorization": `Bearer ${SITE_KEY}` },
-    // some stacks treat keys case-sensitively:
     { "Content-Type": "application/json", "X-Site-Api-Key": SITE_KEY },
     { "Content-Type": "application/json", "X-Api-Key": SITE_KEY },
-    { "Content-Type": "application/json", "Authorization": `Bearer ${SITE_KEY}` },
-    // occasionally named differently:
     { "Content-Type": "application/json", "x-catalyst-site-api-key": SITE_KEY },
   ];
 
   const body = JSON.stringify({ query, variables });
 
-  const attempts = [];
   for (const url of endpoints) {
     for (const headers of headersVariants) {
       try {
         const r = await fetch(url, { method: "POST", headers, body });
-        const text = await r.text();
-        let json = null;
-        try { json = JSON.parse(text); } catch {}
-        if (r.ok && json && json.data) {
+        if (!r.ok) continue;
+        const json = await r.json();
+        if (json?.data) {
           res.status(200).json(json);
           return;
         }
-        attempts.push({
-          url,
-          status: r.status,
-          ok: r.ok,
-          headers: Object.keys(headers), // do not echo key values
-          bodyPreview: text.slice(0, 300)
-        });
-      } catch (e) {
-        attempts.push({
-          url,
-          status: "FETCH_ERROR",
-          ok: false,
-          headers: Object.keys(headers),
-          bodyPreview: String(e).slice(0, 300)
-        });
+      } catch {
+        // try next combo
       }
     }
   }
 
-  res.status(502).json({
-    error: "Catalyst upstream did not accept any endpoint/header combo",
-    host: HOST,
-    attempts
-  });
+  // If nothing worked, return a concise 502 (avoid leaking upstream responses)
+  res.status(502).json({ error: "Catalyst upstream did not accept any endpoint/header combo", host: HOST });
 }
