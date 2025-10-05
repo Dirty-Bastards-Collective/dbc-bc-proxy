@@ -1,24 +1,44 @@
-// Serverless proxy → forwards to Catalyst, adds CORS for Showit
+// api/bc.js
+// Serverless proxy → forwards to Catalyst, adds CORS for Showit + your final domains
+
 export default async function handler(req, res) {
   const origin = req.headers.origin || "";
-  const ALLOW = [
+
+  // Allowlist (exact matches)
+  const ALLOW_EXACT = [
+    // Showit (keep until fully live)
     "https://dirtybastardscollective-llc-4.showitpreview.com",
-    // add your live domain when ready, e.g. "https://dirtybastardscollective.com"
+    "https://dirtybastardscollective-llc-4.showit.site",
+
+    // Final domains (apex + www)
+    "https://dirtybastardscollective.com",
+    "https://www.dirtybastardscollective.com",
   ];
 
-  // CORS/preflight
+  // Allow *.showit.site and *.showitpreview.com subdomains too (safety)
+  const allowed =
+    !!origin &&
+    (
+      origin.endsWith(".showit.site") ||
+      origin.endsWith(".showitpreview.com") ||
+      ALLOW_EXACT.includes(origin)
+    );
+
+  // CORS / preflight
   if (req.method === "OPTIONS") {
-    res.setHeader("Access-Control-Allow-Origin", ALLOW.includes(origin) ? origin : "");
+    res.setHeader("Access-Control-Allow-Origin", allowed ? origin : "*");
+    res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
     res.status(200).end();
     return;
   }
-  res.setHeader("Access-Control-Allow-Origin", ALLOW.includes(origin) ? origin : "");
+
+  res.setHeader("Access-Control-Allow-Origin", allowed ? origin : "*");
   res.setHeader("Vary", "Origin");
 
   // ---- Catalyst config from env ----
-  const HOST = process.env.CATALYST_HOST;             // e.g. https://store-dixtnk4p46-1790940.catalyst-sandbox-vercel.store
+  const HOST = process.env.CATALYST_HOST;             // e.g. https://store-...catalyst-...store
   const SITE_KEY = process.env.CATALYST_SITE_API_KEY; // your Site API key
 
   // Accept body or querystring
