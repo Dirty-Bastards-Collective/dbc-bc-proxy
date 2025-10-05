@@ -1,6 +1,7 @@
 // api/bc.js
 // BigCommerce Admin REST proxy for Showit: products, productByPath, variantStock, checkout
 export default async function handler(req, res) {
+  // ----- CORS (allow Showit preview/site + your live domain) -----
   const origin = req.headers.origin || "";
   const ALLOW_EXACT = [
     "https://dirtybastardscollective-llc-4.showitpreview.com",
@@ -14,7 +15,6 @@ export default async function handler(req, res) {
      origin.endsWith(".showitpreview.com") ||
      ALLOW_EXACT.includes(origin));
 
-  // CORS
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", allowed ? origin : "*");
     res.setHeader("Vary", "Origin");
@@ -25,17 +25,17 @@ export default async function handler(req, res) {
   res.setHeader("Access-Control-Allow-Origin", allowed ? origin : "*");
   res.setHeader("Vary", "Origin");
 
-  // Env
-  const STORE_HASH = process.env.BC_STORE_HASH;
-  const ACCESS_TOKEN = process.env.BC_ACCESS_TOKEN;
-  const CLIENT_ID = process.env.BC_CLIENT_ID;
-  const CHANNEL_ID = process.env.BC_CHANNEL_ID; // <- optional (e.g. "1")
+  // ----- Env -----
+  const STORE_HASH = process.env.BC_STORE_HASH;      // e.g. dixtnk4p46
+  const ACCESS_TOKEN = process.env.BC_ACCESS_TOKEN;  // from Store API account (Products RO, Carts Modify, Checkouts Modify)
+  const CLIENT_ID = process.env.BC_CLIENT_ID;        // from Store API account
+  const CHANNEL_ID = process.env.BC_CHANNEL_ID || ""; // optional, e.g. "1"
   if (!STORE_HASH || !ACCESS_TOKEN || !CLIENT_ID) {
     return res.status(500).json({ error: "Missing env: BC_STORE_HASH, BC_ACCESS_TOKEN, or BC_CLIENT_ID" });
   }
   const API_BASE = `https://api.bigcommerce.com/stores/${STORE_HASH}`;
 
-  // Helper: fetch v3 with better error surfaces
+  // ----- Helper: call BC v3 with better error bubbles -----
   async function bc(pathname, init = {}, version = "v3") {
     const url = `${API_BASE}/${version}${pathname}`;
     const r = await fetch(url, {
@@ -53,20 +53,19 @@ export default async function handler(req, res) {
     let json = null;
     try { json = text ? JSON.parse(text) : null; } catch {}
     if (!r.ok) {
-      // Return full BC error body upstream
-      const errBody = json || text || "";
       const err = new Error(`BC ${r.status} ${pathname}`);
-      err._bc = { status: r.status, pathname, body: errBody };
+      err._bc = { status: r.status, pathname, body: json || text || "" };
       throw err;
     }
     return json ?? {};
   }
 
+  // ----- Input -----
   const body = req.method === "GET" ? req.query : (req.body || {});
-  const { op } = body;
+  const op = body.op;
 
   try {
-    // ========== Shop All ==========
+    // ================= Shop All =================
     if (op === "products") {
       const limit = Math.min(Number(body.limit) || 50, 250);
       const resp = await bc(`/catalog/products?is_visible=true&include=primary_image&limit=${limit}&page=1`);
@@ -82,7 +81,7 @@ export default async function handler(req, res) {
       });
     }
 
-    // ========== Product Detail by path ==========
+    // ================= Product Detail by path =================
     if (op === "productByPath") {
       const wantedPath = (body.path || "/").toLowerCase().replace(/\/+$/, "") || "/";
       const list = await bc(`/catalog/products?is_visible=true&include=primary_image&limit=250&page=1`);
@@ -132,7 +131,7 @@ export default async function handler(req, res) {
       return res.status(200).json({ data: { site: { route: { node } } } });
     }
 
-    // ========== Stock check ==========
+    // ================= Stock check =================
     if (op === "variantStock") {
       const vid = Number(body.variantId);
       if (!vid) return res.status(400).json({ error: "variantId required" });
@@ -144,23 +143,30 @@ export default async function handler(req, res) {
       });
     }
 
-    // ========== Checkout ==========
-    // body.items = [{ variantId, quantity }]
+    // ================= Checkout =================
+    // body.items = [{ variantId, productId?, quantity }]
     if (op === "checkout") {
       const items = Array.isArray(body.items) ? body.items : [];
       if (!items.length) return res.status(400).json({ error: "No items" });
 
-      // Map variant -> product_id
+      // Prefer provided productId (from PDP). Fallback to /variants/:id only if needed.
       const line_items = [];
       for (const it of items) {
         const vId = Number(it.variantId);
+        const pId = it.productId != null ? Number(it.productId) : undefined;
         const qty = Number(it.quantity) || 1;
         if (!vId) continue;
-        const v = await bc(`/catalog/variants/${vId}`);
-        const product_id = v?.data?.product_id;
+
+        let product_id = pId;
         if (!product_id) {
-          return res.status(400).json({ error: `Variant ${vId} missing product_id` });
+          // Fallback lookup (some stores can 405 here, but only used if PDP didn't send productId)
+          const v = await bc(`/catalog/variants/${vId}`);
+          product_id = v?.data?.product_id;
         }
+        if (!product_id) {
+          return res.status(400).json({ error: `Missing product_id for variant ${vId}` });
+        }
+
         line_items.push({ quantity: qty, product_id, variant_id: vId });
       }
       if (!line_items.length) return res.status(400).json({ error: "No valid line items" });
@@ -195,9 +201,11 @@ export default async function handler(req, res) {
       return res.status(200).json({ checkoutUrl, cartId });
     }
 
+    // Unknown op
     return res.status(400).json({ error: "Unknown op" });
+
   } catch (e) {
-    // Surface BigCommerce error details if we have them
+    // Surface BigCommerce error details
     if (e && e._bc) {
       return res.status(502).json({ error: "Upstream BigCommerce error", ...e._bc });
     }
