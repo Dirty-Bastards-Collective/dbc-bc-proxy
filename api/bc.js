@@ -1,29 +1,21 @@
 // api/bc.js
-// Serverless proxy → forwards to Catalyst, adds CORS for Showit + your final domains
-// Works with https://dbc-bc-proxy.vercel.app (make sure env vars are set in Vercel)
+// Proxy → Catalyst with CORS + DIAGNOSTICS (temporary to find the working combo)
 
 export default async function handler(req, res) {
   const origin = req.headers.origin || "";
 
-  // Allowlist (exact matches)
   const ALLOW_EXACT = [
-    // Showit (keep while migrating)
     "https://dirtybastardscollective-llc-4.showitpreview.com",
     "https://dirtybastardscollective-llc-4.showit.site",
-
-    // Final domains (apex + www)
     "https://dirtybastardscollective.com",
     "https://www.dirtybastardscollective.com",
   ];
 
-  // Also accept any *.showit.site / *.showitpreview.com subdomains
   const allowed =
     !!origin &&
-    (
-      origin.endsWith(".showit.site") ||
-      origin.endsWith(".showitpreview.com") ||
-      ALLOW_EXACT.includes(origin)
-    );
+    (origin.endsWith(".showit.site") ||
+     origin.endsWith(".showitpreview.com") ||
+     ALLOW_EXACT.includes(origin));
 
   // CORS / preflight
   if (req.method === "OPTIONS") {
@@ -34,24 +26,22 @@ export default async function handler(req, res) {
     res.status(200).end();
     return;
   }
-
   res.setHeader("Access-Control-Allow-Origin", allowed ? origin : "*");
   res.setHeader("Vary", "Origin");
 
-  // ---- Catalyst config from env (set these in Vercel: Settings → Environment Variables) ----
-  const HOST = process.env.CATALYST_HOST;             // e.g. https://store-dixtnk4p46-1790940.catalyst-sandbox-vercel.store
-  const SITE_KEY = process.env.CATALYST_SITE_API_KEY; // your Site API key
-
+  // Env
+  const HOST = process.env.CATALYST_HOST;
+  const SITE_KEY = process.env.CATALYST_SITE_API_KEY;
   if (!HOST || !SITE_KEY) {
     res.status(500).json({ error: "Missing env: CATALYST_HOST or CATALYST_SITE_API_KEY" });
     return;
   }
 
-  // Accept body or querystring
-  const { op, limit = 50, path, variantId } =
+  // Inputs
+  const { op, limit = 50, path, variantId, debug } =
     req.method === "GET" ? req.query : (req.body || {});
 
-  // Build GraphQL query/variables
+  // GraphQL
   let query, variables;
   if (op === "products") {
     query = `
@@ -84,14 +74,12 @@ export default async function handler(req, res) {
                 images { edges { node { urlOriginal } } }
                 prices { price { value currencyCode } }
                 variants(first: 20) {
-                  edges {
-                    node {
-                      entityId
-                      defaultImage { urlOriginal }
-                      inventory { isInStock }
-                      optionValues { edges { node { label } } }
-                    }
-                  }
+                  edges { node {
+                    entityId
+                    defaultImage { urlOriginal }
+                    inventory { isInStock }
+                    optionValues { edges { node { label } } }
+                  } }
                 }
               }
             }
@@ -115,7 +103,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Try common Catalyst endpoints/headers (Catalyst installs differ slightly)
+  // Candidate endpoints + header names (Catalyst installs vary)
   const endpoints = [
     `${HOST}/api/storefront`,
     `${HOST}/api/storefront/graphql`,
@@ -136,22 +124,47 @@ export default async function handler(req, res) {
 
   const body = JSON.stringify({ query, variables });
 
+  const attempts = [];
   for (const url of endpoints) {
     for (const headers of headersVariants) {
       try {
         const r = await fetch(url, { method: "POST", headers, body });
-        if (!r.ok) continue;
-        const json = await r.json();
-        if (json?.data) {
+        const text = await r.text();
+        let json = null;
+        try { json = JSON.parse(text); } catch {}
+        if (r.ok && json && json.data) {
           res.status(200).json(json);
           return;
         }
-      } catch {
-        // try next combo
+        attempts.push({
+          url,
+          status: r.status,
+          ok: r.ok,
+          headers: Object.keys(headers),       // never echo actual key values
+          bodyPreview: text.slice(0, 300)      // short preview only
+        });
+      } catch (e) {
+        attempts.push({
+          url,
+          status: "FETCH_ERROR",
+          ok: false,
+          headers: Object.keys(headers),
+          bodyPreview: String(e).slice(0, 300)
+        });
       }
     }
   }
 
-  // If nothing worked, return a concise 502 (avoid leaking upstream responses)
+  // If debug flag set, return full attempts list so we can see what's happening
+  if (debug) {
+    res.status(502).json({
+      error: "Upstream not accepted; see attempts",
+      host: HOST,
+      attempts
+    });
+    return;
+  }
+
+  // Otherwise return concise error
   res.status(502).json({ error: "Catalyst upstream did not accept any endpoint/header combo", host: HOST });
 }
