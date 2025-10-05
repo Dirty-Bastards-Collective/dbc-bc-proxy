@@ -1,12 +1,7 @@
 // api/bc.js
-// BigCommerce Admin REST proxy (no Catalyst) + CORS for Showit + final domains.
-// Ops: products, productByPath, variantStock.
-// Uses Store API account creds via env: BC_STORE_HASH, BC_ACCESS_TOKEN, BC_CLIENT_ID.
-
+// BigCommerce Admin REST proxy for Showit: products, productByPath, variantStock, checkout
 export default async function handler(req, res) {
   const origin = req.headers.origin || "";
-
-  // Allowlist
   const ALLOW_EXACT = [
     "https://dirtybastardscollective-llc-4.showitpreview.com",
     "https://dirtybastardscollective-llc-4.showit.site",
@@ -16,33 +11,30 @@ export default async function handler(req, res) {
   const allowed =
     !!origin &&
     (origin.endsWith(".showit.site") ||
-      origin.endsWith(".showitpreview.com") ||
-      ALLOW_EXACT.includes(origin));
+     origin.endsWith(".showitpreview.com") ||
+     ALLOW_EXACT.includes(origin));
 
-  // CORS / preflight
+  // CORS
   if (req.method === "OPTIONS") {
     res.setHeader("Access-Control-Allow-Origin", allowed ? origin : "*");
     res.setHeader("Vary", "Origin");
     res.setHeader("Access-Control-Allow-Methods", "POST, GET, OPTIONS");
     res.setHeader("Access-Control-Allow-Headers", "Content-Type");
-    res.status(200).end();
-    return;
+    return res.status(200).end();
   }
   res.setHeader("Access-Control-Allow-Origin", allowed ? origin : "*");
   res.setHeader("Vary", "Origin");
 
-  // Env
-  const STORE_HASH = process.env.BC_STORE_HASH;       // e.g. dixtnk4p46
-  const ACCESS_TOKEN = process.env.BC_ACCESS_TOKEN;   // Store API account Access Token
-  const CLIENT_ID = process.env.BC_CLIENT_ID;         // Store API account Client ID
+  // Env (already configured)
+  const STORE_HASH = process.env.BC_STORE_HASH;
+  const ACCESS_TOKEN = process.env.BC_ACCESS_TOKEN;
+  const CLIENT_ID = process.env.BC_CLIENT_ID;
   if (!STORE_HASH || !ACCESS_TOKEN || !CLIENT_ID) {
-    res.status(500).json({ error: "Missing env: BC_STORE_HASH, BC_ACCESS_TOKEN, or BC_CLIENT_ID" });
-    return;
+    return res.status(500).json({ error: "Missing env: BC_STORE_HASH, BC_ACCESS_TOKEN, or BC_CLIENT_ID" });
   }
-
   const API_BASE = `https://api.bigcommerce.com/stores/${STORE_HASH}`;
 
-  // Helper: Admin API fetch (v3 by default)
+  // Helper for v3
   async function bc(pathname, init = {}, version = "v3") {
     const url = `${API_BASE}/${version}${pathname}`;
     const r = await fetch(url, {
@@ -59,23 +51,18 @@ export default async function handler(req, res) {
     const text = await r.text();
     let json = null;
     try { json = JSON.parse(text); } catch {}
-    if (!r.ok) {
-      throw new Error(`BC ${r.status} ${pathname}: ${text.slice(0, 400)}`);
-    }
+    if (!r.ok) throw new Error(`BC ${r.status} ${pathname}: ${text.slice(0, 400)}`);
     return json ?? {};
   }
 
-  // Inputs
-  const { op, limit = 50, path, variantId } =
-    req.method === "GET" ? req.query : (req.body || {});
+  const body = req.method === "GET" ? req.query : (req.body || {});
+  const { op } = body;
 
   try {
-    // --- OP: products (Shop All grid) ---
+    // Shop All
     if (op === "products") {
-      // NOTE: custom_url is part of the product object; don't put it in `include`.
-      // primary_image requires `include=primary_image`.
-      const perPage = Math.min(Number(limit) || 50, 250);
-      const resp = await bc(`/catalog/products?is_visible=true&include=primary_image&limit=${perPage}&page=1`);
+      const limit = Math.min(Number(body.limit) || 50, 250);
+      const resp = await bc(`/catalog/products?is_visible=true&include=primary_image&limit=${limit}&page=1`);
       const items = (resp.data || []).map(p => ({
         name: p.name,
         path: p.custom_url?.url || `/product-${p.id}`,
@@ -83,38 +70,32 @@ export default async function handler(req, res) {
         prices: { price: { value: Number(p.price || 0) } },
         _id: p.id,
       }));
-      res.status(200).json({
+      return res.status(200).json({
         data: { site: { products: { edges: items.map(n => ({ node: n })) } } },
       });
-      return;
     }
 
-    // --- OP: productByPath (Product Detail) ---
+    // Product Detail by path
     if (op === "productByPath") {
-      const wantedPath = (path || "/").toLowerCase().replace(/\/+$/, "") || "/";
-
-      // Grab a page of visible products to resolve the slug by custom_url.url
-      const resp = await bc(`/catalog/products?is_visible=true&include=primary_image&limit=250&page=1`);
-      const products = resp.data || [];
+      const wantedPath = (body.path || "/").toLowerCase().replace(/\/+$/, "") || "/";
+      const list = await bc(`/catalog/products?is_visible=true&include=primary_image&limit=250&page=1`);
+      const products = list.data || [];
       const prod = products.find(p => {
         const url = (p.custom_url?.url || "").toLowerCase().replace(/\/+$/, "");
-        // allow with/without leading slash
         return url === wantedPath || url === `/${wantedPath.replace(/^\/?/, "")}`;
       });
-
       if (!prod) {
-        res.status(200).json({ data: { site: { route: { node: null } } } });
-        return;
+        return res.status(200).json({ data: { site: { route: { node: null } } } });
       }
 
-      // Fetch images (v3 images list)
+      // Images
       let images = [];
       try {
         const imgResp = await bc(`/catalog/products/${prod.id}/images?limit=250&page=1`);
         images = (imgResp.data || []).map(img => ({ node: { urlOriginal: img.url_standard } }));
-      } catch { /* optional */ }
+      } catch {}
 
-      // Fetch variants
+      // Variants
       let variantEdges = [];
       try {
         const varsResp = await bc(`/catalog/products/${prod.id}/variants?limit=250&page=1`);
@@ -130,7 +111,7 @@ export default async function handler(req, res) {
             },
           },
         }));
-      } catch { /* optional */ }
+      } catch {}
 
       const node = {
         entityId: prod.id,
@@ -141,30 +122,59 @@ export default async function handler(req, res) {
         prices: { price: { value: Number(prod.price || 0), currencyCode: "USD" } },
         variants: { edges: variantEdges },
       };
-
-      res.status(200).json({ data: { site: { route: { node } } } });
-      return;
+      return res.status(200).json({ data: { site: { route: { node } } } });
     }
 
-    // --- OP: variantStock (qty + button checks) ---
+    // Stock check
     if (op === "variantStock") {
-      const vid = Number(variantId);
-      if (!vid) {
-        res.status(400).json({ error: "variantId required" });
-        return;
-      }
-      // admin API direct variant endpoint
+      const vid = Number(body.variantId);
+      if (!vid) return res.status(400).json({ error: "variantId required" });
       const vResp = await bc(`/catalog/variants/${vid}`);
       const v = vResp.data;
       const isInStock = v ? (v.inventory_level == null ? true : Number(v.inventory_level) > 0) : true;
-      res.status(200).json({
+      return res.status(200).json({
         data: { site: { productVariant: { entityId: vid, inventory: { isInStock } } } },
       });
-      return;
     }
 
-    res.status(400).json({ error: "Unknown op" });
+    // NEW: Checkout
+    // body.items = [{ variantId, quantity }]
+    if (op === "checkout") {
+      const items = Array.isArray(body.items) ? body.items : [];
+      if (!items.length) return res.status(400).json({ error: "No items" });
+
+      // Map each variant to its product_id
+      const line_items = [];
+      for (const it of items) {
+        const vId = Number(it.variantId);
+        const qty = Number(it.quantity) || 1;
+        if (!vId) continue;
+        const v = await bc(`/catalog/variants/${vId}`);
+        const product_id = v?.data?.product_id;
+        if (!product_id) throw new Error(`Variant ${vId} missing product_id`);
+        line_items.push({ quantity: qty, product_id, variant_id: vId });
+      }
+      if (!line_items.length) return res.status(400).json({ error: "No valid line items" });
+
+      // Create cart with redirect URLs
+      const cartCreate = await bc(`/carts?include=redirect_urls`, {
+        method: "POST",
+        body: JSON.stringify({ line_items: line_items.map(li => ({ quantity: li.quantity, product_id: li.product_id, variant_id: li.variant_id })) }),
+      });
+      const cartId = cartCreate?.data?.id;
+      let checkoutUrl = cartCreate?.data?.redirect_urls?.checkout_url;
+
+      if (!checkoutUrl && cartId) {
+        const redir = await bc(`/carts/${cartId}/redirect_urls`, { method: "POST", body: JSON.stringify({}) });
+        checkoutUrl = redir?.data?.checkout_url;
+      }
+      if (!checkoutUrl) throw new Error("Could not create checkout URL");
+
+      return res.status(200).json({ checkoutUrl, cartId });
+    }
+
+    return res.status(400).json({ error: "Unknown op" });
   } catch (e) {
-    res.status(502).json({ error: e.message || String(e) });
+    return res.status(502).json({ error: e.message || String(e) });
   }
 }
