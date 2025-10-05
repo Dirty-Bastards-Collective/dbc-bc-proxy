@@ -1,5 +1,6 @@
 // api/bc.js
 // Serverless proxy → forwards to Catalyst, adds CORS for Showit + your final domains
+// Includes diagnostics: returns upstream status/text for each attempt on failure.
 
 export default async function handler(req, res) {
   const origin = req.headers.origin || "";
@@ -15,7 +16,6 @@ export default async function handler(req, res) {
     "https://www.dirtybastardscollective.com",
   ];
 
-  // Allow *.showit.site and *.showitpreview.com subdomains too (safety)
   const allowed =
     !!origin &&
     (
@@ -40,6 +40,11 @@ export default async function handler(req, res) {
   // ---- Catalyst config from env ----
   const HOST = process.env.CATALYST_HOST;             // e.g. https://store-...catalyst-...store
   const SITE_KEY = process.env.CATALYST_SITE_API_KEY; // your Site API key
+
+  if (!HOST || !SITE_KEY) {
+    res.status(500).json({ error: "Missing env: CATALYST_HOST or CATALYST_SITE_API_KEY" });
+    return;
+  }
 
   // Accept body or querystring
   const { op, limit = 50, path, variantId } =
@@ -114,30 +119,58 @@ export default async function handler(req, res) {
     `${HOST}/api/storefront`,
     `${HOST}/api/storefront/graphql`,
     `${HOST}/graphql`,
+    `${HOST}/storefront/graphql`,          // extra candidates
+    `${HOST}/api/graphql`,
   ];
-  const headersList = [
+
+  const headersVariants = [
     { "Content-Type": "application/json", "x-site-api-key": SITE_KEY },
     { "Content-Type": "application/json", "x-api-key": SITE_KEY },
+    { "Content-Type": "application/json", "authorization": `Bearer ${SITE_KEY}` },
+    // some stacks treat keys case-sensitively:
+    { "Content-Type": "application/json", "X-Site-Api-Key": SITE_KEY },
+    { "Content-Type": "application/json", "X-Api-Key": SITE_KEY },
     { "Content-Type": "application/json", "Authorization": `Bearer ${SITE_KEY}` },
+    // occasionally named differently:
+    { "Content-Type": "application/json", "x-catalyst-site-api-key": SITE_KEY },
   ];
 
   const body = JSON.stringify({ query, variables });
 
+  const attempts = [];
   for (const url of endpoints) {
-    for (const headers of headersList) {
+    for (const headers of headersVariants) {
       try {
         const r = await fetch(url, { method: "POST", headers, body });
-        if (!r.ok) continue;
-        const json = await r.json();
-        if (json?.data) {
+        const text = await r.text();
+        let json = null;
+        try { json = JSON.parse(text); } catch {}
+        if (r.ok && json && json.data) {
           res.status(200).json(json);
           return;
         }
-      } catch (_) {
-        // try next combo
+        attempts.push({
+          url,
+          status: r.status,
+          ok: r.ok,
+          headers: Object.keys(headers), // do not echo key values
+          bodyPreview: text.slice(0, 300)
+        });
+      } catch (e) {
+        attempts.push({
+          url,
+          status: "FETCH_ERROR",
+          ok: false,
+          headers: Object.keys(headers),
+          bodyPreview: String(e).slice(0, 300)
+        });
       }
     }
   }
 
-  res.status(502).json({ error: "No Catalyst endpoint accepted the request" });
+  res.status(502).json({
+    error: "Catalyst upstream did not accept any endpoint/header combo",
+    host: HOST,
+    attempts
+  });
 }
