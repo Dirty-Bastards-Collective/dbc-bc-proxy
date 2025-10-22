@@ -1,56 +1,55 @@
-/* DBC Checkout Injector v3.2 (scoped + self-test) */
+/* DBC Checkout Injector v4
+ * One file, loaded on BigCommerce Checkout only.
+ * - Scoped CSS (no font resets)
+ * - Brand colors: bg #231f20, text #ffffff, accent #f0783d
+ * - Repoint logo to site home
+ * - “Edit cart” → back to site with ?openCart=1
+ * - Self-test badge + console log so you know it loaded
+ */
 (function DBC_CHECKOUT_INJECTOR(){
-  // --- self-test markers ---
-  window.DBC_INJECTOR_VERSION = '3.2';
-  try {
-    console.log('✅ DBC checkout injector v' + window.DBC_INJECTOR_VERSION + ' loaded');
-  } catch(_) {}
-
+  // --- config ---
   var BRAND_BG = "#231f20";
   var BRAND_TEXT = "#ffffff";
   var BRAND_ACCENT = "#f0783d";
   var SITE_HOME = "https://dirtybastardscollective.com/";
   var EDIT_CART_TARGET = "https://dirtybastardscollective.com/?openCart=1";
 
+  // --- self-test ---
+  try { console.log("✅ DBC checkout injector v4 loaded"); } catch(_) {}
+
+  // inject styles (scoped to checkout containers)
   function injectStyles(css){
     try {
-      var style = document.createElement('style');
-      style.type = 'text/css';
-      style.setAttribute('data-dbc','checkout-css');
+      var style = document.createElement("style");
+      style.type = "text/css";
+      style.setAttribute("data-dbc","checkout-css");
       style.appendChild(document.createTextNode(css));
       document.head.appendChild(style);
-    } catch(e){ console.warn('DBC: style inject failed', e); }
+    } catch(e){ console.warn("DBC: style inject failed", e); }
   }
 
   function buildCSS(){
     return `
       :root{ --dbc-bg:${BRAND_BG}; --dbc-fg:${BRAND_TEXT}; --dbc-accent:${BRAND_ACCENT}; }
 
-      /* SCOPED: don’t touch html/body/fonts */
-      .optimizedCheckout-contentPrimary,
-      .optimizedCheckout-contentSecondary,
-      .layout, .page, .checkout, .optimizedCheckout-form-checkout {
+      /* SCOPED: do not touch html/body so site fonts/links remain */
+      .layout, .page, .checkout, .optimizedCheckout-form-checkout,
+      .optimizedCheckout-contentPrimary, .optimizedCheckout-contentSecondary {
         background: var(--dbc-bg) !important;
       }
 
-      /* Text inside checkout areas */
-      .optimizedCheckout-contentPrimary h1,
-      .optimizedCheckout-contentPrimary h2,
-      .optimizedCheckout-contentPrimary h3,
-      .optimizedCheckout-contentPrimary h4,
-      .optimizedCheckout-contentPrimary h5,
-      .optimizedCheckout-contentPrimary h6,
+      /* Headings & text inside checkout columns */
+      .optimizedCheckout-contentPrimary h1, .optimizedCheckout-contentPrimary h2,
+      .optimizedCheckout-contentPrimary h3, .optimizedCheckout-contentPrimary h4,
+      .optimizedCheckout-contentPrimary h5, .optimizedCheckout-contentPrimary h6,
       .optimizedCheckout-contentPrimary p,
-      .optimizedCheckout-contentSecondary h1,
-      .optimizedCheckout-contentSecondary h2,
-      .optimizedCheckout-contentSecondary h3,
-      .optimizedCheckout-contentSecondary h4,
-      .optimizedCheckout-contentSecondary h5,
-      .optimizedCheckout-contentSecondary h6,
+      .optimizedCheckout-contentSecondary h1, .optimizedCheckout-contentSecondary h2,
+      .optimizedCheckout-contentSecondary h3, .optimizedCheckout-contentSecondary h4,
+      .optimizedCheckout-contentSecondary h5, .optimizedCheckout-contentSecondary h6,
       .optimizedCheckout-contentSecondary p,
-      .optimizedCheckout-headingPrimary,
-      .optimizedCheckout-headingSecondary,
-      .cart-priceItem, .cart-total {
+      .optimizedCheckout-headingPrimary, .optimizedCheckout-headingSecondary,
+      .cart-priceItem, .cart-total, .cart-priceItem-value, .cart-total-value,
+      .alertBox, .alertBox-message {
         color: var(--dbc-fg) !important;
       }
 
@@ -95,11 +94,7 @@
         opacity: .5 !important; cursor: not-allowed !important;
       }
 
-      /* Totals & alerts */
-      .cart-priceItem-value, .cart-total-value { color: var(--dbc-fg) !important; }
-      .alertBox, .alertBox-message { color: var(--dbc-fg) !important; }
-
-      /* tiny badge so you can SEE it loaded; fades out */
+      /* Tiny badge so you can SEE it loaded; fades out */
       #dbc-badge {
         position: fixed; right: 10px; bottom: 10px;
         background: var(--dbc-accent); color: #000; padding: 6px 10px;
@@ -111,15 +106,16 @@
 
   function badge(){
     try {
-      var b = document.createElement('div');
-      b.id = 'dbc-badge';
-      b.textContent = 'DBC styles v' + (window.DBC_INJECTOR_VERSION||'');
+      var b = document.createElement("div");
+      b.id = "dbc-badge";
+      b.textContent = "DBC styles v4";
       document.body.appendChild(b);
-      setTimeout(function(){ b.style.opacity = '0'; }, 2000);
+      setTimeout(function(){ b.style.opacity = "0"; }, 2000);
       setTimeout(function(){ b.remove(); }, 2800);
     } catch(_){}
   }
 
+  // logo → SITE_HOME
   function patchLogoLink(){
     try {
       var candidates = Array.from(document.querySelectorAll(
@@ -135,6 +131,7 @@
     } catch(e){ console.warn("DBC: patchLogoLink failed", e); }
   }
 
+  // “Edit cart” → back to your site (opens drawer via ?openCart=1)
   function rewireEditCart(){
     try {
       var links = Array.from(document.querySelectorAll(
@@ -168,6 +165,7 @@
   } else {
     runAll();
   }
+  // Retry to catch late-hydrating nodes
   setTimeout(runAll, 600);
   setTimeout(runAll, 1500);
 })();
