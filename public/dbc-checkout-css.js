@@ -1,10 +1,9 @@
-/* DBC Checkout Injector v4
- * One file, loaded on BigCommerce Checkout only.
- * - Scoped CSS (no font resets)
+/* DBC Checkout Injector v5
+ * - Scoped styles (no global resets)
  * - Brand colors: bg #231f20, text #ffffff, accent #f0783d
- * - Repoint logo to site home
- * - “Edit cart” → back to site with ?openCart=1
- * - Self-test badge + console log so you know it loaded
+ * - Injects Roboto Mono for checkout only
+ * - Repoint header logo + “Edit cart” → site (/?openCart=1)
+ * - Small badge + console log to confirm load
  */
 (function DBC_CHECKOUT_INJECTOR(){
   // --- config ---
@@ -14,10 +13,27 @@
   var SITE_HOME = "https://dirtybastardscollective.com/";
   var EDIT_CART_TARGET = "https://dirtybastardscollective.com/?openCart=1";
 
-  // --- self-test ---
-  try { console.log("✅ DBC checkout injector v4 loaded"); } catch(_) {}
+  try { console.log("✅ DBC checkout injector v5 loaded"); } catch(_) {}
 
-  // inject styles (scoped to checkout containers)
+  // Inject Roboto Mono (scoped to checkout containers via CSS below)
+  function ensureRobotoMono(){
+    try {
+      // preconnects (nice-to-have)
+      var p1 = document.createElement("link");
+      p1.rel = "preconnect"; p1.href = "https://fonts.googleapis.com";
+      var p2 = document.createElement("link");
+      p2.rel = "preconnect"; p2.href = "https://fonts.gstatic.com"; p2.crossOrigin = "anonymous";
+      document.head.appendChild(p1); document.head.appendChild(p2);
+
+      // fonts stylesheet
+      var f = document.createElement("link");
+      f.rel = "stylesheet";
+      f.href = "https://fonts.googleapis.com/css2?family=Roboto+Mono:wght@400;700&display=swap";
+      f.setAttribute("data-dbc","checkout-font");
+      document.head.appendChild(f);
+    } catch(e){ console.warn("DBC: font inject failed", e); }
+  }
+
   function injectStyles(css){
     try {
       var style = document.createElement("style");
@@ -32,13 +48,20 @@
     return `
       :root{ --dbc-bg:${BRAND_BG}; --dbc-fg:${BRAND_TEXT}; --dbc-accent:${BRAND_ACCENT}; }
 
-      /* SCOPED: do not touch html/body so site fonts/links remain */
+      /* SCOPED shells only (don’t touch <html>/<body>) */
       .layout, .page, .checkout, .optimizedCheckout-form-checkout,
       .optimizedCheckout-contentPrimary, .optimizedCheckout-contentSecondary {
         background: var(--dbc-bg) !important;
       }
 
-      /* Headings & text inside checkout columns */
+      /* Apply Roboto Mono + colors inside checkout areas only */
+      .optimizedCheckout-contentPrimary, .optimizedCheckout-contentSecondary,
+      .optimizedCheckout-form-checkout, .checkout {
+        font-family: 'Roboto Mono', monospace !important;
+        color: var(--dbc-fg) !important;
+      }
+
+      /* Headings & text */
       .optimizedCheckout-contentPrimary h1, .optimizedCheckout-contentPrimary h2,
       .optimizedCheckout-contentPrimary h3, .optimizedCheckout-contentPrimary h4,
       .optimizedCheckout-contentPrimary h5, .optimizedCheckout-contentPrimary h6,
@@ -49,8 +72,9 @@
       .optimizedCheckout-contentSecondary p,
       .optimizedCheckout-headingPrimary, .optimizedCheckout-headingSecondary,
       .cart-priceItem, .cart-total, .cart-priceItem-value, .cart-total-value,
-      .alertBox, .alertBox-message {
+      .alertBox, .alertBox-message, label, .form-label, .form-field-label {
         color: var(--dbc-fg) !important;
+        font-family: 'Roboto Mono', monospace !important;
       }
 
       /* Inputs */
@@ -63,6 +87,7 @@
         background: #1c1a1a !important;
         color: var(--dbc-fg) !important;
         border: 1px solid #4a4a4a !important;
+        font-family: 'Roboto Mono', monospace !important;
       }
       .optimizedCheckout-contentPrimary input::placeholder,
       .optimizedCheckout-contentPrimary textarea::placeholder,
@@ -86,6 +111,7 @@
         color: var(--dbc-accent) !important;
         border: 1px solid var(--dbc-accent) !important;
         box-shadow: none !important;
+        font-family: 'Roboto Mono', monospace !important;
       }
       .optimizedCheckout-contentPrimary .button:disabled,
       .optimizedCheckout-contentSecondary .button:disabled,
@@ -100,6 +126,7 @@
         background: var(--dbc-accent); color: #000; padding: 6px 10px;
         font-size: 12px; border-radius: 6px; z-index: 999999;
         pointer-events: none; opacity: .95; transition: opacity .6s ease;
+        font-family: 'Roboto Mono', monospace !important;
       }
     `;
   }
@@ -108,14 +135,13 @@
     try {
       var b = document.createElement("div");
       b.id = "dbc-badge";
-      b.textContent = "DBC styles v4";
+      b.textContent = "DBC styles v5";
       document.body.appendChild(b);
       setTimeout(function(){ b.style.opacity = "0"; }, 2000);
       setTimeout(function(){ b.remove(); }, 2800);
     } catch(_){}
   }
 
-  // logo → SITE_HOME
   function patchLogoLink(){
     try {
       var candidates = Array.from(document.querySelectorAll(
@@ -131,7 +157,6 @@
     } catch(e){ console.warn("DBC: patchLogoLink failed", e); }
   }
 
-  // “Edit cart” → back to your site (opens drawer via ?openCart=1)
   function rewireEditCart(){
     try {
       var links = Array.from(document.querySelectorAll(
@@ -154,6 +179,7 @@
   }
 
   function runAll(){
+    ensureRobotoMono();
     injectStyles(buildCSS());
     patchLogoLink();
     rewireEditCart();
@@ -165,7 +191,6 @@
   } else {
     runAll();
   }
-  // Retry to catch late-hydrating nodes
   setTimeout(runAll, 600);
   setTimeout(runAll, 1500);
 })();
