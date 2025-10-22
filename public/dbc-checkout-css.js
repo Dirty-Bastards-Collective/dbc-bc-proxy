@@ -1,80 +1,179 @@
-(function () {
-  try {
-    /* ========= 1) CSS THEME + BACKGROUNDS ========= */
-    var css = "\
-:root{--dbc-accent:#f0783d;--dbc-text:#ffffff;--dbc-bg:#0b0c0d;}\
-/* global surface */\
-html,body{background:var(--dbc-bg)!important;}\
-body.optimizedCheckout-body{background:var(--dbc-bg)!important;color:var(--dbc-text)!important;font-family:'Roboto Mono', monospace!important;}\
-/* common containers/panels */\
-.layout,.layout-main,.optimizedCheckout-contentPrimary,.optimizedCheckout-contentSecondary,.optimizedCheckout-orderSummary,.checkout-view-content,.stepHeader,.accordion,.accordion-content,.form-legend,.form-body{background:transparent!important;color:var(--dbc-text)!important;}\
-/* headings & text */\
-.optimizedCheckout-headingPrimary,.optimizedCheckout-headingSecondary,.optimizedCheckout-contentPrimary h1,.optimizedCheckout-contentPrimary h2,.optimizedCheckout-contentPrimary h3{color:var(--dbc-text)!important;font-family:'Roboto Mono', monospace!important;}\
-.optimizedCheckout-contentPrimary,.optimizedCheckout-form-input,.optimizedCheckout-form-label{color:var(--dbc-text)!important;font-family:'Roboto Mono', monospace!important;}\
-/* inputs */\
-.optimizedCheckout-form-input{background:#1a1c1f!important;border-color:#333!important;color:var(--dbc-text)!important;}\
-.optimizedCheckout-form-input::placeholder{color:#aaa!important;}\
-/* buttons */\
-.button--primary,button[type='submit'].button--primary,.optimizedCheckout-buttonPrimary{background:transparent!important;color:var(--dbc-accent)!important;border:1px solid var(--dbc-accent)!important;font-weight:700!important;text-transform:none!important;}\
-.button--primary:hover{filter:brightness(1.1);}\
-.button--secondary,.optimizedCheckout-buttonSecondary{background:transparent!important;border:1px solid #666!important;color:#ddd!important;}\
-/* links */\
-a,.optimizedCheckout-contentPrimary a{color:var(--dbc-accent)!important;}\
-/* order summary */\
-.optimizedCheckout-orderSummary .cart-priceItem,.optimizedCheckout-orderSummary .cart-priceItem-value,.optimizedCheckout-orderSummary .cart-priceItem-label{color:var(--dbc-text)!important;}\
-/* errors */\
-.optimizedCheckout-form-input.is-invalid,.form-field--error .optimizedCheckout-form-input{border-color:#d66!important;}\
-.alertBox-message,.form-inlineMessage{color:#f4c2c2!important;}\
-/* optional: hide 'continue shopping' or cart links that bounce out */\
-.checkoutHeader .header-continueShopping,.cart-modal-link{display:none!important;}\
-";
-    var el = document.createElement('style');
-    el.type = 'text/css';
-    el.appendChild(document.createTextNode(css));
-    document.head.appendChild(el);
+/* DBC Checkout Injector (v3)
+ * - Injects minimal CSS (bg #231f20, white text, accent #f0783d)
+ * - Repoints header logo to your site
+ * - Rewires “Edit cart” to return to your site and open the cart
+ * Safe-by-default: no global leaks, retries in case checkout hydrates late.
+ */
+(function DBC_CHECKOUT_INJECTOR() {
+  var BRAND_BG = "#231f20";
+  var BRAND_TEXT = "#ffffff";
+  var BRAND_ACCENT = "#f0783d";
+  var SITE_HOME = "https://dirtybastardscollective.com/";
+  var EDIT_CART_TARGET = "https://dirtybastardscollective.com/?openCart=1";
 
-    /* ========= 2) LOGO LINK PATCH =========
-       - Change the logo to go to your domain (or disable it entirely).
-       - If you prefer to DISABLE, set WANT_DISABLE_LOGO = true.
-    */
-    var WANT_DISABLE_LOGO = false; // set true to make logo unclickable
-    var TARGET_URL = "https://dirtybastardscollective.com/"; // where you want the logo to go
+  /* ============ 1) CSS Injection ============ */
+  function injectStyles(css) {
+    try {
+      var style = document.createElement("style");
+      style.type = "text/css";
+      style.setAttribute("data-dbc", "checkout-css");
+      style.appendChild(document.createTextNode(css));
+      document.head.appendChild(style);
+    } catch (e) {
+      console.warn("DBC: style inject failed", e);
+    }
+  }
 
-    function patchLogoLink() {
-      try {
-        // try a few likely selectors BigCommerce uses on checkout
-        var candidates = [].slice.call(document.querySelectorAll(
-          ".checkoutHeader a, .header-logo a, a.header-logo__link, .logo a, .header-logo-link, .checkoutHeader-logo a"
-        ));
-        // fallback: any top-left anchor with an img
-        if (!candidates.length) {
-          candidates = [].slice.call(document.querySelectorAll("a[href] img")).map(function(img){ return img.closest("a"); }).filter(Boolean);
+  function buildCSS() {
+    return `
+      /* ====== DBC minimal theme ====== */
+      :root {
+        --dbc-bg: ${BRAND_BG};
+        --dbc-fg: ${BRAND_TEXT};
+        --dbc-accent: ${BRAND_ACCENT};
+      }
+
+      html, body {
+        background: var(--dbc-bg) !important;
+        color: var(--dbc-fg) !important;
+      }
+
+      /* Main shells BigCommerce uses */
+      .layout, .page, .optimizedCheckout-contentPrimary, .optimizedCheckout-contentSecondary,
+      .optimizedCheckout-form-checkout, .checkout {
+        background: var(--dbc-bg) !important;
+        color: var(--dbc-fg) !important;
+      }
+
+      /* Headings & common text */
+      h1, h2, h3, h4, h5, h6,
+      .optimizedCheckout-headingPrimary,
+      .optimizedCheckout-headingSecondary,
+      .optimizedCheckout-contentPrimary p,
+      .optimizedCheckout-contentSecondary p,
+      .form-field-label,
+      .form-label,
+      .cart-priceItem,
+      .cart-total {
+        color: var(--dbc-fg) !important;
+      }
+
+      /* Links & accents */
+      a, .link, .optimizedCheckout-header a {
+        color: var(--dbc-accent) !important;
+      }
+      a:hover, .link:hover {
+        opacity: .9;
+      }
+
+      /* Buttons (keep BC layout, just recolor) */
+      .button, button, [type="submit"], .button--primary, .button--action {
+        background: transparent !important;
+        color: var(--dbc-accent) !important;
+        border: 1px solid var(--dbc-accent) !important;
+        box-shadow: none !important;
+      }
+      .button:disabled, [type="submit"]:disabled {
+        opacity: .5 !important;
+        cursor: not-allowed !important;
+      }
+
+      /* Inputs */
+      input, select, textarea {
+        background: #1c1a1a !important;
+        color: var(--dbc-fg) !important;
+        border: 1px solid #4a4a4a !important;
+      }
+      input::placeholder, textarea::placeholder {
+        color: #bbbbbb !important;
+      }
+
+      /* Panels / boxes */
+      .form-field, .form-legend, .form-body,
+      .checkout-view-header, .checkout-view-content,
+      .cart, .cart-section {
+        background: transparent !important;
+        color: var(--dbc-fg) !important;
+      }
+
+      /* Totals box */
+      .cart-priceItem-value, .cart-total-value {
+        color: var(--dbc-fg) !important;
+      }
+
+      /* Errors / alerts keep contrast */
+      .alertBox, .alertBox-message {
+        color: var(--dbc-fg) !important;
+      }
+    `;
+  }
+
+  /* ============ 2) Patch Header Logo Link ============ */
+  function patchLogoLink() {
+    try {
+      var candidates = Array.from(document.querySelectorAll(
+        ".header-logo a, .optimizedCheckout-header a, header a, .checkoutHeader a"
+      ));
+      if (!candidates.length) return;
+
+      candidates.forEach(function(a) {
+        // Make sure it's the brand/home logo link (often wraps an <img>)
+        if (a.querySelector("img") || /logo/i.test(a.className || "")) {
+          a.setAttribute("href", SITE_HOME);
+          a.setAttribute("target", "_self");
+          a.setAttribute("rel", "noopener");
         }
-        var a = candidates.find(Boolean);
-        if (!a) return;
+      });
+    } catch (e) {
+      console.warn("DBC: patchLogoLink failed", e);
+    }
+  }
 
-        if (WANT_DISABLE_LOGO) {
-          a.removeAttribute("href");
-          a.style.pointerEvents = "none";
-          a.style.cursor = "default";
-          return;
-        }
+  /* ============ 3) EDIT CART → back to site & open drawer ============ */
+  function rewireEditCart() {
+    try {
+      var links = Array.from(document.querySelectorAll(
+        ".checkoutHeader a, .header a, a.button, a.link, a"
+      ));
+      // Prefer text matches “edit” + “cart”
+      var candidates = links.filter(function(a) {
+        var t = (a.textContent || "").trim().toLowerCase();
+        return t.includes("edit") && t.includes("cart");
+      });
 
-        a.setAttribute("href", TARGET_URL);
+      // Common BC selectors (fallbacks)
+      candidates = candidates.concat(Array.from(document.querySelectorAll(
+        ".header-continueShopping, .cart-modal-link, a[data-test='step-header-edit']"
+      )));
+
+      // Dedup
+      candidates = Array.from(new Set(candidates));
+
+      candidates.forEach(function(a) {
+        a.setAttribute("href", EDIT_CART_TARGET);
         a.setAttribute("target", "_self");
         a.setAttribute("rel", "noopener");
-      } catch (e) {
-        console.warn("DBC: logo patch failed", e);
-      }
+        // Optional label tweak:
+        // a.textContent = "Back to Cart";
+      });
+    } catch (e) {
+      console.warn("DBC: rewireEditCart failed", e);
     }
-
-    // run once DOM is ready, and again after React re-renders
-    var ready = (document.readyState === "interactive" || document.readyState === "complete");
-    if (ready) patchLogoLink(); else document.addEventListener("DOMContentLoaded", patchLogoLink);
-    // retry a couple times to survive SPA transitions
-    setTimeout(patchLogoLink, 800);
-    setTimeout(patchLogoLink, 1800);
-  } catch (e) {
-    console.error('DBC checkout CSS/JS inject failed', e);
   }
+
+  /* ============ Boot ============ */
+  function runAll() {
+    injectStyles(buildCSS());
+    patchLogoLink();
+    rewireEditCart();
+  }
+
+  if (document.readyState === "loading") {
+    document.addEventListener("DOMContentLoaded", runAll);
+  } else {
+    runAll();
+  }
+  // Retry a couple times for late-hydrating checkout DOM
+  setTimeout(runAll, 600);
+  setTimeout(runAll, 1500);
 })();
